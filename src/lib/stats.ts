@@ -1,4 +1,4 @@
-import { addDays, isSameMonth, startOfDay, subDays } from 'date-fns'
+import { addDays, differenceInCalendarDays, isSameMonth, startOfDay, subDays } from 'date-fns'
 import { dayKey } from './date'
 import type { CheckIn } from './types'
 
@@ -69,4 +69,13 @@ export function lastNDaysCounts(byDay: Map<string, CheckIn[]>, n: number): DayCo
     result.push({ date, count: byDay.get(dayKey(date))?.length ?? 0 })
   }
   return result
+}
+
+/** Calendar days elapsed since the first ever check-in, inclusive of today — assumes continuous use rather than counting only active days. */
+export function daysSinceFirst(checkins: CheckIn[]): { days: number; firstDate: Date | null } {
+  if (checkins.length === 0) return { days: 0, firstDate: null }
+  const firstMs = Math.min(...checkins.map((c) => new Date(c.checkedAt).getTime()))
+  const firstDate = startOfDay(new Date(firstMs))
+  const days = differenceInCalendarDays(startOfDay(new Date()), firstDate) + 1
+  return { days, firstDate }
 }
