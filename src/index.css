@@ -15,3 +15,30 @@ body {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
 }
+
+/* Chart data-ink palette, kept separate from the app's violet UI chrome. */
+.viz {
+  --viz-line: #2a78d6;
+  --viz-trend: #c3c2b7;
+  --viz-low: #6da7ec;
+  --viz-mid: #2a78d6;
+  --viz-high: #184f95;
+  --viz-text-muted: #898781;
+  --viz-grid: #e1e0d9;
+  --viz-baseline: #c3c2b7;
+  --viz-surface: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .viz {
+    --viz-line: #3987e5;
+    --viz-trend: #383835;
+    --viz-low: #6da7ec;
+    --viz-mid: #3987e5;
+    --viz-high: #256abf;
+    --viz-text-muted: #898781;
+    --viz-grid: #2c2c2a;
+    --viz-baseline: #383835;
+    --viz-surface: #0a0a0a;
+  }
+}

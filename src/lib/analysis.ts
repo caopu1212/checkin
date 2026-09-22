@@ -117,39 +117,48 @@ export function kMeans1D(values: number[], k: number, maxIterations = 25): { ass
   return { assignments, centers }
 }
 
+export type ActivityTier = '低' | '中' | '高'
+
 export interface ActivityCluster {
-  label: '低' | '中' | '高'
+  label: ActivityTier
   center: number
   months: MonthBucket[]
 }
 
-/** Buckets months into low/mid/high activity clusters via k=3 k-means on their totals. */
-export function monthlyActivityClusters(monthly: MonthBucket[]): ActivityCluster[] {
+export interface TieredMonth {
+  month: MonthBucket
+  tier: ActivityTier
+}
+
+const TIER_LABELS: ActivityTier[] = ['低', '中', '高']
+
+/** k=3 k-means on monthly totals, kept in chronological order (for a scatter/time-series view). */
+export function monthlyActivityTiers(monthly: MonthBucket[]): TieredMonth[] {
   if (monthly.length === 0) return []
   const values = monthly.map((m) => m.count)
   const { assignments, centers } = kMeans1D(values, 3)
   const rankedClusterIndices = centers.map((_, i) => i).sort((a, b) => centers[a] - centers[b])
-  const labels: Array<'低' | '中' | '高'> = ['低', '中', '高']
-  const labelForCluster = new Map<number, '低' | '中' | '高'>()
+  const labelForCluster = new Map<number, ActivityTier>()
   rankedClusterIndices.forEach((clusterIdx, rank) => {
-    labelForCluster.set(clusterIdx, labels[Math.min(rank, labels.length - 1)])
+    labelForCluster.set(clusterIdx, TIER_LABELS[Math.min(rank, TIER_LABELS.length - 1)])
   })
+  return monthly.map((month, i) => ({ month, tier: labelForCluster.get(assignments[i])! }))
+}
 
-  const groups = new Map<'低' | '中' | '高', MonthBucket[]>()
-  monthly.forEach((m, i) => {
-    const label = labelForCluster.get(assignments[i])!
-    const list = groups.get(label) ?? []
-    list.push(m)
-    groups.set(label, list)
+/** Groups the same k-means assignment into low/mid/high buckets for a summary view. */
+export function monthlyActivityClusters(monthly: MonthBucket[]): ActivityCluster[] {
+  const tiered = monthlyActivityTiers(monthly)
+  const groups = new Map<ActivityTier, MonthBucket[]>()
+  for (const { month, tier } of tiered) {
+    const list = groups.get(tier) ?? []
+    list.push(month)
+    groups.set(tier, list)
+  }
+  return TIER_LABELS.filter((label) => groups.has(label)).map((label) => {
+    const months = groups.get(label)!
+    const center = months.reduce((sum, m) => sum + m.count, 0) / months.length
+    return { label, center, months }
   })
-
-  return labels
-    .filter((label) => groups.has(label))
-    .map((label) => {
-      const months = groups.get(label)!
-      const clusterIdx = [...labelForCluster.entries()].find(([, l]) => l === label)![0]
-      return { label, center: centers[clusterIdx], months }
-    })
 }
 
 export interface SeasonalBucket {

@@ -4,6 +4,7 @@ import {
   hourDistribution,
   linearTrend,
   monthlyActivityClusters,
+  monthlyActivityTiers,
   monthlyTotals,
   regularityStats,
   seasonality,
@@ -11,46 +12,12 @@ import {
 } from '../lib/analysis'
 import { groupByDay, daysSinceFirst } from '../lib/stats'
 import type { CheckIn } from '../lib/types'
+import { ColumnChart } from './charts/ColumnChart'
+import { LineChart } from './charts/LineChart'
+import { ScatterChart } from './charts/ScatterChart'
 
 interface Props {
   checkins: CheckIn[]
-}
-
-function MiniBarChart({
-  data,
-  formatValue,
-  scrollable,
-}: {
-  data: { label: string; count: number }[]
-  formatValue?: (n: number) => string
-  /** When there are too many columns to fit, scroll horizontally instead of squeezing each bar unreadably thin. */
-  scrollable?: boolean
-}) {
-  const max = Math.max(1, ...data.map((d) => d.count))
-  const columns = data.map((d, i) => (
-    <div
-      key={i}
-      className={scrollable ? 'flex w-8 flex-none flex-col items-center gap-1' : 'flex flex-1 flex-col items-center gap-1'}
-    >
-      <span className="text-[10px] text-neutral-400">
-        {d.count > 0 ? (formatValue ? formatValue(d.count) : d.count) : ''}
-      </span>
-      <div
-        className="w-full rounded-t bg-violet-500 dark:bg-violet-700"
-        style={{ height: `${(d.count / max) * 100}%`, minHeight: d.count > 0 ? 4 : 1 }}
-      />
-      <span className="text-[10px] text-neutral-400">{d.label}</span>
-    </div>
-  ))
-
-  if (scrollable) {
-    return (
-      <div className="-mx-1 overflow-x-auto px-1">
-        <div className="flex h-24 items-end gap-2">{columns}</div>
-      </div>
-    )
-  }
-  return <div className="flex h-24 items-end gap-2">{columns}</div>
 }
 
 function Section({ title, children, note }: { title: string; children: React.ReactNode; note?: string }) {
@@ -69,12 +36,6 @@ const TREND_TEXT = {
   flat: '基本持平',
 }
 
-const CLUSTER_COLOR: Record<'低' | '中' | '高', string> = {
-  低: 'bg-neutral-300 dark:bg-neutral-700',
-  中: 'bg-violet-400 dark:bg-violet-800',
-  高: 'bg-violet-700 dark:bg-violet-500',
-}
-
 export function AnalysisView({ checkins }: Props) {
   const byDay = useMemo(() => groupByDay(checkins), [checkins])
   const { days: totalDays, firstDate } = useMemo(() => daysSinceFirst(checkins), [checkins])
@@ -82,7 +43,12 @@ export function AnalysisView({ checkins }: Props) {
   const weekday = useMemo(() => weekdayDistribution(checkins), [checkins])
   const months = useMemo(() => monthlyTotals(checkins), [checkins])
   const trend = useMemo(() => linearTrend(months), [months])
+  const trendSeries = useMemo(
+    () => months.map((_, i) => trend.slopePerMonth * i + trend.intercept),
+    [months, trend],
+  )
   const clusters = useMemo(() => monthlyActivityClusters(months), [months])
+  const tieredMonths = useMemo(() => monthlyActivityTiers(months), [months])
   const season = useMemo(() => seasonality(months), [months])
   const { buckets: hours, sampleSize: hourSampleSize } = useMemo(() => hourDistribution(checkins), [checkins])
 
@@ -93,7 +59,7 @@ export function AnalysisView({ checkins }: Props) {
   const busiestWeekday = weekday.reduce((a, b) => (b.count > a.count ? b : a))
   const busiestHour = hours.reduce((a, b) => (b.count > a.count ? b : a))
   const busiestSeasonMonth = season.reduce((a, b) => (b.avg > a.avg ? b : a))
-  const currentMonthCluster = clusters.find((c) => c.months.some((m) => m.key === months[months.length - 1]?.key))
+  const currentMonthTier = tieredMonths[tieredMonths.length - 1]?.tier
 
   return (
     <div className="space-y-4">
@@ -133,46 +99,32 @@ export function AnalysisView({ checkins }: Props) {
 
       <Section
         title="月度趋势（线性回归）"
-        note={`最小二乘法拟合：每月约 ${trend.slopePerMonth >= 0 ? '+' : ''}${trend.slopePerMonth.toFixed(2)} 次，${TREND_TEXT[trend.direction]}。按此趋势外推，下个月预计约 ${trend.predictedNextMonth.toFixed(1)} 次。数据较少或波动大时，趋势仅供参考。`}
+        note={`最小二乘法拟合：每月约 ${trend.slopePerMonth >= 0 ? '+' : ''}${trend.slopePerMonth.toFixed(2)} 次，${TREND_TEXT[trend.direction]}。按此趋势外推，下个月预计约 ${trend.predictedNextMonth.toFixed(1)} 次。数据较少或波动大时，趋势仅供参考。点击图上的点可查看当月具体数值。`}
       >
-        <MiniBarChart data={months.map((m) => ({ label: m.label, count: m.count }))} scrollable />
+        <LineChart data={months.map((m) => ({ label: m.label, value: m.count }))} trend={trendSeries} />
       </Section>
 
       <Section
-        title="活跃度聚类（K-Means, k=3）"
-        note={`按每月打卡总次数做聚类，把 ${months.length} 个月分成低/中/高三档活跃度。最近一个月（${months[months.length - 1]?.label}）属于「${currentMonthCluster?.label ?? '-'}」档。`}
+        title="活跃度聚类点阵图（K-Means, k=3）"
+        note={`按每月打卡总次数做聚类，把 ${months.length} 个月分成低/中/高三档活跃度：低 ${clusters.find((c) => c.label === '低')?.months.length ?? 0} 个月（月均${(clusters.find((c) => c.label === '低')?.center ?? 0).toFixed(1)}次）、中 ${clusters.find((c) => c.label === '中')?.months.length ?? 0} 个月（月均${(clusters.find((c) => c.label === '中')?.center ?? 0).toFixed(1)}次）、高 ${clusters.find((c) => c.label === '高')?.months.length ?? 0} 个月（月均${(clusters.find((c) => c.label === '高')?.center ?? 0).toFixed(1)}次）。最近一个月属于「${currentMonthTier ?? '-'}」档。`}
       >
-        <div className="space-y-2">
-          {clusters.map((c) => (
-            <div key={c.label} className="flex items-center gap-2">
-              <span className={`h-2 w-2 shrink-0 rounded-full ${CLUSTER_COLOR[c.label]}`} />
-              <span className="w-10 text-xs text-neutral-600 dark:text-neutral-400">{c.label}活跃</span>
-              <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
-                <div
-                  className={`h-full ${CLUSTER_COLOR[c.label]}`}
-                  style={{ width: `${(c.months.length / months.length) * 100}%` }}
-                />
-              </div>
-              <span className="w-24 shrink-0 text-right text-xs text-neutral-500">
-                {c.months.length} 个月 · 月均{c.center.toFixed(1)}次
-              </span>
-            </div>
-          ))}
-        </div>
+        <ScatterChart
+          data={tieredMonths.map(({ month, tier }) => ({ label: month.label, value: month.count, tier }))}
+        />
       </Section>
 
       <Section
         title="季节性（按日历月份）"
         note={`跨年汇总每个日历月的月均打卡次数，用来看是否存在季节性规律，与上面按时间先后的月度趋势不同。${busiestSeasonMonth.label}历史平均最高（约 ${busiestSeasonMonth.avg.toFixed(1)} 次）。含首月/当月不完整数据，仅供参考。`}
       >
-        <MiniBarChart
-          data={season.map((s) => ({ label: s.label, count: Math.round(s.avg * 10) / 10 }))}
-          formatValue={(n) => n.toFixed(1)}
+        <ColumnChart
+          data={season.map((s) => ({ label: s.label, value: Math.round(s.avg * 10) / 10 }))}
+          valueSuffix=" 次"
         />
       </Section>
 
       <Section title="星期分布" note={`打卡最多的是周${busiestWeekday.label}`}>
-        <MiniBarChart data={weekday} />
+        <ColumnChart data={weekday.map((w) => ({ label: w.label, value: w.count }))} valueSuffix=" 次" />
       </Section>
 
       <Section
@@ -183,7 +135,7 @@ export function AnalysisView({ checkins }: Props) {
             : '还没有真实打卡时间记录（历史导入的记录不计入，因为它们的时间是估算生成的），正常打卡积累后这里会显示。'
         }
       >
-        <MiniBarChart data={hours} />
+        <ColumnChart data={hours.map((h) => ({ label: h.label, value: h.count }))} valueSuffix=" 次" />
         {hourSampleSize > 0 && (
           <p className="mt-2 text-xs text-neutral-500">最常打卡的时段：{busiestHour.label}</p>
         )}
