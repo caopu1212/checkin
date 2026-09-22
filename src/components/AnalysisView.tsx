@@ -3,8 +3,10 @@ import { format } from 'date-fns'
 import {
   hourDistribution,
   linearTrend,
+  monthlyActivityClusters,
   monthlyTotals,
   regularityStats,
+  seasonality,
   weekdayDistribution,
 } from '../lib/analysis'
 import { groupByDay, daysSinceFirst } from '../lib/stats'
@@ -67,6 +69,12 @@ const TREND_TEXT = {
   flat: '基本持平',
 }
 
+const CLUSTER_COLOR: Record<'低' | '中' | '高', string> = {
+  低: 'bg-neutral-300 dark:bg-neutral-700',
+  中: 'bg-violet-400 dark:bg-violet-800',
+  高: 'bg-violet-700 dark:bg-violet-500',
+}
+
 export function AnalysisView({ checkins }: Props) {
   const byDay = useMemo(() => groupByDay(checkins), [checkins])
   const { days: totalDays, firstDate } = useMemo(() => daysSinceFirst(checkins), [checkins])
@@ -74,7 +82,9 @@ export function AnalysisView({ checkins }: Props) {
   const weekday = useMemo(() => weekdayDistribution(checkins), [checkins])
   const months = useMemo(() => monthlyTotals(checkins), [checkins])
   const trend = useMemo(() => linearTrend(months), [months])
-  const hours = useMemo(() => hourDistribution(checkins), [checkins])
+  const clusters = useMemo(() => monthlyActivityClusters(months), [months])
+  const season = useMemo(() => seasonality(months), [months])
+  const { buckets: hours, sampleSize: hourSampleSize } = useMemo(() => hourDistribution(checkins), [checkins])
 
   if (checkins.length === 0) {
     return <p className="py-10 text-center text-sm text-neutral-400">还没有数据，打几次卡再来看分析吧</p>
@@ -82,6 +92,8 @@ export function AnalysisView({ checkins }: Props) {
 
   const busiestWeekday = weekday.reduce((a, b) => (b.count > a.count ? b : a))
   const busiestHour = hours.reduce((a, b) => (b.count > a.count ? b : a))
+  const busiestSeasonMonth = season.reduce((a, b) => (b.avg > a.avg ? b : a))
+  const currentMonthCluster = clusters.find((c) => c.months.some((m) => m.key === months[months.length - 1]?.key))
 
   return (
     <div className="space-y-4">
@@ -120,10 +132,43 @@ export function AnalysisView({ checkins }: Props) {
       </Section>
 
       <Section
-        title="月度趋势"
-        note={`按最小二乘法拟合的线性趋势：每月约 ${trend.slopePerMonth >= 0 ? '+' : ''}${trend.slopePerMonth.toFixed(2)} 次，${TREND_TEXT[trend.direction]}。数据较少或波动大时，趋势仅供参考。`}
+        title="月度趋势（线性回归）"
+        note={`最小二乘法拟合：每月约 ${trend.slopePerMonth >= 0 ? '+' : ''}${trend.slopePerMonth.toFixed(2)} 次，${TREND_TEXT[trend.direction]}。按此趋势外推，下个月预计约 ${trend.predictedNextMonth.toFixed(1)} 次。数据较少或波动大时，趋势仅供参考。`}
       >
         <MiniBarChart data={months.map((m) => ({ label: m.label, count: m.count }))} scrollable />
+      </Section>
+
+      <Section
+        title="活跃度聚类（K-Means, k=3）"
+        note={`按每月打卡总次数做聚类，把 ${months.length} 个月分成低/中/高三档活跃度。最近一个月（${months[months.length - 1]?.label}）属于「${currentMonthCluster?.label ?? '-'}」档。`}
+      >
+        <div className="space-y-2">
+          {clusters.map((c) => (
+            <div key={c.label} className="flex items-center gap-2">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${CLUSTER_COLOR[c.label]}`} />
+              <span className="w-10 text-xs text-neutral-600 dark:text-neutral-400">{c.label}活跃</span>
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+                <div
+                  className={`h-full ${CLUSTER_COLOR[c.label]}`}
+                  style={{ width: `${(c.months.length / months.length) * 100}%` }}
+                />
+              </div>
+              <span className="w-24 shrink-0 text-right text-xs text-neutral-500">
+                {c.months.length} 个月 · 月均{c.center.toFixed(1)}次
+              </span>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section
+        title="季节性（按日历月份）"
+        note={`跨年汇总每个日历月的月均打卡次数，用来看是否存在季节性规律，与上面按时间先后的月度趋势不同。${busiestSeasonMonth.label}历史平均最高（约 ${busiestSeasonMonth.avg.toFixed(1)} 次）。含首月/当月不完整数据，仅供参考。`}
+      >
+        <MiniBarChart
+          data={season.map((s) => ({ label: s.label, count: Math.round(s.avg * 10) / 10 }))}
+          formatValue={(n) => n.toFixed(1)}
+        />
       </Section>
 
       <Section title="星期分布" note={`打卡最多的是周${busiestWeekday.label}`}>
@@ -132,10 +177,16 @@ export function AnalysisView({ checkins }: Props) {
 
       <Section
         title="时段分布"
-        note="早期从历史表格导入的记录没有精确时间，系统在 8:00–22:00 之间均匀分配，所以这部分时段分布不完全反映真实习惯；之后正常打卡积累多了会越来越准。"
+        note={
+          hourSampleSize > 0
+            ? `仅统计 ${hourSampleSize} 条真实打卡时间（已排除时间为估算生成的历史导入记录）。`
+            : '还没有真实打卡时间记录（历史导入的记录不计入，因为它们的时间是估算生成的），正常打卡积累后这里会显示。'
+        }
       >
         <MiniBarChart data={hours} />
-        <p className="mt-2 text-xs text-neutral-500">最常打卡的时段：{busiestHour.label}</p>
+        {hourSampleSize > 0 && (
+          <p className="mt-2 text-xs text-neutral-500">最常打卡的时段：{busiestHour.label}</p>
+        )}
       </Section>
     </div>
   )

@@ -1,4 +1,5 @@
 import { differenceInCalendarDays, eachMonthOfInterval, format, startOfDay, startOfMonth } from 'date-fns'
+import { IMPORT_NOTE } from './historicalImport'
 import type { CheckIn } from './types'
 
 const WEEKDAY_ORDER = ['一', '二', '三', '四', '五', '六', '日']
@@ -42,13 +43,16 @@ export function monthlyTotals(checkins: CheckIn[]): MonthBucket[] {
 
 export interface TrendResult {
   slopePerMonth: number
+  intercept: number
   direction: 'up' | 'down' | 'flat'
+  /** Linear extrapolation for the month right after the data ends; never negative. */
+  predictedNextMonth: number
 }
 
 /** Ordinary least-squares fit of monthly totals against month index, so the slope reads as "checkins/month change per month". */
 export function linearTrend(monthly: MonthBucket[]): TrendResult {
   const n = monthly.length
-  if (n < 2) return { slopePerMonth: 0, direction: 'flat' }
+  if (n < 2) return { slopePerMonth: 0, intercept: monthly[0]?.count ?? 0, direction: 'flat', predictedNextMonth: monthly[0]?.count ?? 0 }
 
   const xs = monthly.map((_, i) => i)
   const ys = monthly.map((m) => m.count)
@@ -62,9 +66,113 @@ export function linearTrend(monthly: MonthBucket[]): TrendResult {
     den += (xs[i] - xMean) ** 2
   }
   const slope = den === 0 ? 0 : num / den
+  const intercept = yMean - slope * xMean
 
   const direction = slope > 0.15 ? 'up' : slope < -0.15 ? 'down' : 'flat'
-  return { slopePerMonth: slope, direction }
+  const predictedNextMonth = Math.max(0, slope * n + intercept)
+  return { slopePerMonth: slope, intercept, direction, predictedNextMonth }
+}
+
+/**
+ * Simple deterministic 1D k-means: centers seed from evenly-spaced quantiles
+ * of the sorted values (no randomness, so results are stable/reproducible).
+ */
+export function kMeans1D(values: number[], k: number, maxIterations = 25): { assignments: number[]; centers: number[] } {
+  if (values.length === 0) return { assignments: [], centers: [] }
+  const effectiveK = Math.min(k, new Set(values).size || 1)
+  const sorted = [...values].sort((a, b) => a - b)
+  let centers = Array.from({ length: effectiveK }, (_, i) => {
+    const idx = Math.floor(((i + 0.5) / effectiveK) * sorted.length)
+    return sorted[Math.min(idx, sorted.length - 1)]
+  })
+
+  let assignments = new Array(values.length).fill(0)
+  for (let iter = 0; iter < maxIterations; iter++) {
+    let changed = false
+    assignments = values.map((v) => {
+      let best = 0
+      let bestDist = Infinity
+      for (let c = 0; c < centers.length; c++) {
+        const dist = Math.abs(v - centers[c])
+        if (dist < bestDist) {
+          bestDist = dist
+          best = c
+        }
+      }
+      return best
+    })
+
+    const sums = new Array(centers.length).fill(0)
+    const counts = new Array(centers.length).fill(0)
+    values.forEach((v, i) => {
+      sums[assignments[i]] += v
+      counts[assignments[i]] += 1
+    })
+    const nextCenters = centers.map((c, i) => (counts[i] > 0 ? sums[i] / counts[i] : c))
+    if (nextCenters.some((c, i) => c !== centers[i])) changed = true
+    centers = nextCenters
+    if (!changed) break
+  }
+
+  return { assignments, centers }
+}
+
+export interface ActivityCluster {
+  label: '低' | '中' | '高'
+  center: number
+  months: MonthBucket[]
+}
+
+/** Buckets months into low/mid/high activity clusters via k=3 k-means on their totals. */
+export function monthlyActivityClusters(monthly: MonthBucket[]): ActivityCluster[] {
+  if (monthly.length === 0) return []
+  const values = monthly.map((m) => m.count)
+  const { assignments, centers } = kMeans1D(values, 3)
+  const rankedClusterIndices = centers.map((_, i) => i).sort((a, b) => centers[a] - centers[b])
+  const labels: Array<'低' | '中' | '高'> = ['低', '中', '高']
+  const labelForCluster = new Map<number, '低' | '中' | '高'>()
+  rankedClusterIndices.forEach((clusterIdx, rank) => {
+    labelForCluster.set(clusterIdx, labels[Math.min(rank, labels.length - 1)])
+  })
+
+  const groups = new Map<'低' | '中' | '高', MonthBucket[]>()
+  monthly.forEach((m, i) => {
+    const label = labelForCluster.get(assignments[i])!
+    const list = groups.get(label) ?? []
+    list.push(m)
+    groups.set(label, list)
+  })
+
+  return labels
+    .filter((label) => groups.has(label))
+    .map((label) => {
+      const months = groups.get(label)!
+      const clusterIdx = [...labelForCluster.entries()].find(([, l]) => l === label)![0]
+      return { label, center: centers[clusterIdx], months }
+    })
+}
+
+export interface SeasonalBucket {
+  monthNum: number
+  label: string
+  avg: number
+}
+
+/** Average count per calendar month (Jan–Dec) across all years present, to surface seasonality independent of the chronological trend. */
+export function seasonality(monthly: MonthBucket[]): SeasonalBucket[] {
+  const byMonthNum = new Map<number, number[]>()
+  for (const m of monthly) {
+    const monthNum = Number(m.key.slice(5, 7))
+    const list = byMonthNum.get(monthNum) ?? []
+    list.push(m.count)
+    byMonthNum.set(monthNum, list)
+  }
+  return Array.from({ length: 12 }, (_, i) => {
+    const monthNum = i + 1
+    const list = byMonthNum.get(monthNum) ?? []
+    const avg = list.length > 0 ? list.reduce((a, b) => a + b, 0) / list.length : 0
+    return { monthNum, label: `${monthNum}月`, avg }
+  })
 }
 
 export interface RegularityStats {
@@ -109,11 +217,16 @@ export interface HourBucket {
   count: number
 }
 
-export function hourDistribution(checkins: CheckIn[]): HourBucket[] {
+/**
+ * Excludes historical-import rows: their times are synthesized (spread evenly
+ * across a window), not real, so they'd distort a time-of-day analysis.
+ */
+export function hourDistribution(checkins: CheckIn[]): { buckets: HourBucket[]; sampleSize: number } {
+  const real = checkins.filter((c) => c.note !== IMPORT_NOTE)
   const counts = new Array(6).fill(0)
-  for (const c of checkins) {
+  for (const c of real) {
     const hour = new Date(c.checkedAt).getHours()
     counts[Math.floor(hour / 4)] += 1
   }
-  return HOUR_BUCKET_LABELS.map((label, i) => ({ label, count: counts[i] }))
+  return { buckets: HOUR_BUCKET_LABELS.map((label, i) => ({ label, count: counts[i] })), sampleSize: real.length }
 }

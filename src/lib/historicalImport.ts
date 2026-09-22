@@ -6,7 +6,7 @@ import type { CheckIn } from './types'
 const IMPORT_FLAG_KEY = 'historicalImportDone'
 const DAY_START_HOUR = 8
 const DAY_END_HOUR = 22
-const IMPORT_NOTE = '历史导入'
+export const IMPORT_NOTE = '历史导入'
 
 function timesForCount(n: number): Array<{ hours: number; minutes: number }> {
   const windowHours = DAY_END_HOUR - DAY_START_HOUR
