@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { dayKey } from '../lib/date'
 import { computeStreaks, countInMonth, groupByDay, lastNDaysCounts } from '../lib/stats'
 import type { CheckIn } from '../lib/types'
+import { HistoricalImport } from './HistoricalImport'
 
 interface Props {
   checkins: CheckIn[]
@@ -51,6 +52,8 @@ export function StatsView({ checkins }: Props) {
           ))}
         </div>
       </div>
+
+      <HistoricalImport />
     </div>
   )
 }
