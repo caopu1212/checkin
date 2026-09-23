@@ -52,7 +52,7 @@ function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, sign
         </div>
       </header>
 
-      <main className="flex-1 px-4 pb-24 pt-2">
+      <main className={`flex-1 px-4 pb-24 pt-2 ${tab === 'today' ? 'flex flex-col justify-center' : ''}`}>
         {tab === 'today' && (
           <DayPanel
             date={new Date()}
@@ -100,7 +100,7 @@ function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, sign
 
 function Workspace({ userId, signOut }: { userId: string; signOut: () => Promise<void> }) {
   const syncStatus = useSync(userId)
-  const { categories, addCategory, renameCategory } = useCategories(userId)
+  const { categories, addCategory, renameCategory, deleteCategory } = useCategories(userId)
   const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null)
 
   const activeCategory = categories.find((c) => c.id === activeCategoryId)
@@ -112,6 +112,7 @@ function Workspace({ userId, signOut }: { userId: string; signOut: () => Promise
         onSelect={setActiveCategoryId}
         addCategory={addCategory}
         renameCategory={renameCategory}
+        deleteCategory={deleteCategory}
       />
     )
   }
