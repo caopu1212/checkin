@@ -69,7 +69,7 @@ export function CategoryPicker({ categories, onSelect, addCategory, renameCatego
               <button
                 type="button"
                 onClick={() => onSelect(c.id)}
-                className="flex-1 rounded-l-xl px-4 py-4 text-left text-base font-medium text-neutral-900 hover:bg-neutral-50 dark:text-neutral-100 dark:hover:bg-neutral-900"
+                className="flex-1 rounded-l-xl px-4 py-4 text-center text-base font-medium text-neutral-900 hover:bg-neutral-50 dark:text-neutral-100 dark:hover:bg-neutral-900"
               >
                 {c.name}
               </button>
