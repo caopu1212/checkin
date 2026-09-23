@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { CheckIn } from './types'
+import type { CheckIn, Category } from './types'
 
 interface MetaRow {
   key: string
@@ -8,12 +8,18 @@ interface MetaRow {
 
 class AppDatabase extends Dexie {
   checkins!: Table<CheckIn, string>
+  categories!: Table<Category, string>
   meta!: Table<MetaRow, string>
 
   constructor() {
     super('checkin-app')
     this.version(1).stores({
       checkins: 'id, checkedAt, updatedAt, dirty, deleted',
+      meta: 'key',
+    })
+    this.version(2).stores({
+      checkins: 'id, checkedAt, updatedAt, dirty, deleted, categoryId',
+      categories: 'id, updatedAt, dirty, deleted',
       meta: 'key',
     })
   }
@@ -32,8 +38,9 @@ export async function setMeta(key: string, value: string): Promise<void> {
 
 /** Wipes all local data, used on sign-out so the next user doesn't see stale records. */
 export async function clearLocalData(): Promise<void> {
-  await db.transaction('rw', db.checkins, db.meta, async () => {
+  await db.transaction('rw', db.checkins, db.categories, db.meta, async () => {
     await db.checkins.clear()
+    await db.categories.clear()
     await db.meta.clear()
   })
 }

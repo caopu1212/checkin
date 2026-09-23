@@ -6,7 +6,7 @@
 - **项目代号**：checkin-app
 - **创建日期**：2026-09-22
 - **最后更新**：2026-09-23
-- **当前阶段**：核心功能 + 图表可视化已完成并部署上线，日常使用中；无进行中的开发任务
+- **当前阶段**：多事件（分类）打卡功能已完成，本地验证通过；等待用户在 Supabase 执行建表 SQL 后即可部署上线
 
 ---
 
@@ -43,6 +43,7 @@
 | P1 | 没网也能打卡（离线支持） | ✅ 已完成（本地优先 + 联网后自动同步） |
 | P1 | 更深入的数据分析（不只是基础统计） | ✅ 已完成（回归、聚类、季节性等） |
 | P2 | 历史数据迁移（旧记录表格导入） | ✅ 已完成（一次性导入功能） |
+| P1 | 针对不同事情分开打卡、分开统计 | ✅ 已完成（"事件"概念，进系统先选事件，数据完全独立） |
 
 ### 1.3 明确不做的事（Scope Out）
 
@@ -80,29 +81,31 @@ src/
   data/
     historical-import.json   # 从旧记录表格导出的 [日期, 次数] 数组
   lib/
-    types.ts             # CheckIn 类型
+    types.ts             # CheckIn / Category 类型
     supabase.ts          # Supabase client
-    db.ts                # Dexie 本地数据库 schema
-    sync.ts              # 推送/拉取同步逻辑 + 全局同步触发器
+    db.ts                # Dexie 本地数据库 schema（checkins / categories / meta）
+    sync.ts              # 推送/拉取同步逻辑（categories + checkins）+ 全局同步触发器
     date.ts              # 日期工具（日历网格、格式化）
     stats.ts             # 基础统计（连续天数、按天分组、使用天数等）
     analysis.ts          # 深入分析（星期/月度/时段分布、线性回归、K-Means 聚类、季节性）
-    historicalImport.ts  # 历史数据一次性导入逻辑
+    historicalImport.ts  # 历史数据一次性导入逻辑（归属指定分类）
   hooks/
-    useAuth.ts       # Supabase Auth 会话
-    useCheckins.ts   # 本地 CRUD（Dexie liveQuery，响应式）
-    useSync.ts       # 挂载同步定时器 + online 事件监听
+    useAuth.ts        # Supabase Auth 会话
+    useCategories.ts  # 分类 CRUD + 首次迁移（自动建默认分类、旧数据归类）
+    useCheckins.ts    # 本地 CRUD（按 categoryId 过滤，Dexie liveQuery，响应式）
+    useSync.ts        # 挂载同步定时器 + online 事件监听
   components/
     Auth.tsx             # 登录/注册
+    CategoryPicker.tsx    # 事件选择页：进系统后先选事件，可新建/改名
     DayPanel.tsx          # 某一天的详情：打卡按钮 + 列表 + 补录
     CheckInRow.tsx        # 单条打卡记录，点击可编辑时间/备注/删除
     CalendarView.tsx      # 月历视图：每天打卡次数、左右滑动切月、点标题跳转年月
     StatsView.tsx         # 统计页：概览/分析 两个子栏目
     AnalysisView.tsx      # 分析子栏目：规律性、趋势、聚类、季节性、分布图表
-    HistoricalImport.tsx  # 统计页里的"导入历史数据"卡片
+    HistoricalImport.tsx  # 统计页里的"导入历史数据"卡片（仅历史数据归属的分类可见）
     SyncBadge.tsx         # 同步状态指示
     charts/               # 图表组件（列图/折线/散点，统一样式，遵循 dataviz 设计规范）
-  App.tsx                # 三个 Tab：今日 / 日历 / 统计
+  App.tsx  # Workspace（事件选择 ⇄ AppShell）+ AppShell 内三个 Tab：今日 / 日历 / 统计
 ```
 
 ### 2.2 同步是怎么工作的
@@ -121,6 +124,13 @@ src/
 - 已有真实记录的日期会自动跳过，不会重复计数
 - 只需在"统计 → 概览"里点一次"导入历史数据"，本地会记一个标记（`historicalImportDone`），之后不会重复出现
 - **分析时的处理**：日期本身是真实的，所以星期分布、月度趋势、季节性等按日期的分析仍然包含这些记录；但"时段分布"（按小时）会排除标了 `历史导入` 备注的记录，因为那部分时间是估算生成的，不是真实打卡时间
+
+### 2.4 多事件（分类）是怎么工作的
+
+- **数据模型**：新增 `categories` 表（id、名称、排序、软删除、同步用的 dirty/updatedAt），`checkins` 加一个 `categoryId` 字段。分类和打卡记录走同一套本地优先 + 同步机制
+- **导航方式**：登录后先进"选择事件"页（`CategoryPicker`），选中某个事件才进入它自己的 今日/日历/统计 三个 Tab；页头点击标题可"切换事件"回到选择页。不同事件之间的数据完全独立，UI 组件本身不需要感知"当前是哪个分类"，只是从上层拿到已经按 categoryId 过滤好的数据
+- **首次迁移**（`useCategories.ts` 里的 `ensureDefaultCategories`）：这个功能是后加的，所以第一次运行时会自动创建两个占位分类（事情A / 事情B），并把所有"迁移前就存在、没有 categoryId"的打卡记录全部归到事情A（因为用户确认历史数据都属于同一个事件）。只执行一次（本地 `categoryMigrationDone` 标记），用一个模块级单例 Promise 防止 React StrictMode 双重调用导致重复创建分类（开发时真实复现过这个问题）
+- **历史数据导入的归属**：`HistoricalImport` 组件只在"历史数据所属的那个分类"（`legacyCategoryId`，迁移时记在 meta 里）下才会显示，导入的记录也只写入这个分类，不会因为切换分类而导错地方
 
 ---
 
@@ -185,6 +195,17 @@ src/
 
 **产出**：`src/components/charts/`（`ColumnChart.tsx` / `LineChart.tsx` / `ScatterChart.tsx` / `Legend.tsx` / `YAxisTicks.tsx` / `scale.ts`）
 
+### Phase 6：多事件（分类）打卡 ✅ 本地验证通过（2026-09-23），⬜ 待部署
+
+- [x] 数据模型：新增 `categories` 表 + `checkins.categoryId`，走同一套同步机制
+- [x] "选择事件"页（进系统先选事件，可新建/改名），选中后进入该事件独立的 今日/日历/统计
+- [x] 页头"切换事件"入口，随时可以退回选择页
+- [x] 首次迁移：自动建默认分类（事情A/事情B），旧数据（含历史导入的 962 条）全部归到事情A
+- [x] 历史数据导入功能改为按分类归属显示/写入，不会导错事件
+- [x] 修复了 React StrictMode 下migration 逻辑的竞态条件（会导致重复创建分类），改用模块级单例 Promise
+- [x] 本地用 devuser 测试：新建/改名分类、跨分类数据隔离、历史导入归属，均验证通过
+- [ ] **待办**：用户需要在 Supabase SQL Editor 里执行 §5 的建表 SQL，之后才能正式同步到云端（当前本地测试时同步会报"找不到 categories 表"，符合预期，不是 bug）
+
 ---
 
 ## 5. 运行与部署
@@ -228,6 +249,34 @@ create index checkins_user_updated_idx on public.checkins(user_id, updated_at);
 
 Authentication → Providers → Email 关掉了 "Confirm email"，注册后可直接登录。
 
+### Supabase 迁移 SQL（Phase 6 多事件功能，**待用户执行**）
+
+```sql
+create table public.categories (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id),
+  name text not null,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  deleted boolean not null default false
+);
+
+alter table public.categories enable row level security;
+
+create policy "owner full access" on public.categories
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create index categories_user_updated_idx on public.categories(user_id, updated_at);
+
+alter table public.checkins add column category_id uuid references public.categories(id);
+create index checkins_user_category_idx on public.checkins(user_id, category_id);
+```
+
+**必须先执行这段 SQL，再打开更新后的正式站点**，否则同步会报"找不到 categories 表"（本地数据不会丢，只是云端还同步不上，等 SQL 跑完打开一次就会自动补上）。
+
 ### 部署（已完成，日常不用再操作）
 
 - 仓库：[github.com/caopu1212/checkin](https://github.com/caopu1212/checkin)（Public）
@@ -264,6 +313,8 @@ Authentication → Providers → Email 关掉了 "Confirm email"，注册后可�
 | 2026-09-22 | 历史数据导入方式 | ✅ 应用内功能，走正常登录态写入，不用 Supabase 密钥 | 系统拦截了直接用 secret key 写库的尝试（判定为凭据探测），改用更安全、也更简单的路径 |
 | 2026-09-23 | 图表方案 | ✅ 自绘 SVG 组件，不引入图表库 | 包体积已有警告，且能完全按 dataviz 技能规范定制样式（色彩、交互、间距） |
 | 2026-09-23 | 图表配色 | ✅ 数据用 dataviz 技能验证过的蓝色系，UI chrome 保持原有紫色 | 复用已验证的 CVD 安全配色用于图表数据编码，避免重新调色+验证的工作量，同时不改变 App 现有品牌观感 |
+| 2026-09-23 | 多事件导航模式 | ✅ 进系统先选事件，再进各自独立的今日/日历/统计（不是"共享页面+分类筛选 Tab"） | 用户明确要求"进入系统后首先要选择事件"、"数据互相独立"，比筛选式 Tab 更符合"独立工作区"的心智模型，且几乎不用改动现有 Today/Calendar/Stats 组件内部逻辑 |
+| 2026-09-23 | 历史数据归属 | ✅ 全部归到自动创建的"事情A"（占位名，用户可改名） | 用户确认"之前的打卡都是其中一个事件的"，先用占位名字，以后随时在应用里改 |
 
 ---
 
@@ -272,6 +323,9 @@ Authentication → Providers → Email 关掉了 "Confirm email"，注册后可�
 1. **PWA 图标**：现在是脚本生成的占位图，要不要设计一个更精致的图标？
 2. **历史导入时间估算**：现在是 8:00–22:00 均匀分布，如果发现和实际习惯差异较大，要不要改成别的估算策略（比如更贴近星期分布/季节性反映出的模式）？
 3. **Bundle 体积**：暂未做代码分割，如果以后加更多功能导致明显变慢，需要考虑 `dynamic import()` 拆分。
+4. **事情A / 事情B 改名**：现在还是占位名字，等你确定了实际名字随时可以在"选择事件"页点"改名"。
+5. **多设备并发建分类的边界情况**：如果两台都没运行过迁移的设备几乎同时首次打开新版本，理论上可能各自创建一套默认分类导致重复（概率很低，个人单人使用场景基本不会遇到，真遇到了手动删掉重复的一组即可）。
+6. **事件数量变多后的选择页布局**：现在"选择事件"页是纵向列表，2-3 个正合适；如果以后事件明显变多，可能需要加排序/常用置顶/搜索。
 
 ---
 
@@ -301,3 +355,4 @@ Authentication → Providers → Email 关掉了 "Confirm email"，注册后可�
 | 2026-09-23 | 图表可视化升级：按 dataviz 技能规范重做图表——聚类点阵图（散点）、月度趋势折线图（含回归拟合线）、统一样式柱状图组件，支持横向滚动和点击查看数值 |
 | 2026-09-23 | 文档改版：`DEVELOPMENT.md` 迁移并扩展为 `PLAN.md`，采用带决策日志、开放问题、维护规则的更完整格式（对齐 meeting-copilot 项目的文档习惯） |
 | 2026-09-23 | 图表改为每个数据点常驻标注数值（不再只标最大值/依赖点击），用户反馈"不标数字看不出是多少" |
+| 2026-09-23 | 新增多事件（分类）打卡：数据模型加 `categories` 表 + `checkins.categoryId`，App 入口改为先选事件再进各自独立的今日/日历/统计；旧数据自动归到占位分类"事情A"。本地测试通过，待用户执行 Supabase 建表 SQL 后上线 |

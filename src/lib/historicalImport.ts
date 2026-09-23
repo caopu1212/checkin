@@ -25,9 +25,11 @@ export async function isHistoricalImportDone(): Promise<boolean> {
   return (await getMeta(IMPORT_FLAG_KEY)) === 'true'
 }
 
-export async function getImportSummary(): Promise<{ days: number; total: number; skipped: number }> {
+export async function getImportSummary(
+  categoryId: string,
+): Promise<{ days: number; total: number; skipped: number }> {
   const data = historicalData as [string, number][]
-  const existing = await db.checkins.filter((c) => !c.deleted).toArray()
+  const existing = await db.checkins.where('categoryId').equals(categoryId).filter((c) => !c.deleted).toArray()
   const existingDays = new Set(existing.map((c) => c.checkedAt.slice(0, 10)))
   const toImport = data.filter(([dateStr]) => !existingDays.has(dateStr))
   return {
@@ -37,14 +39,14 @@ export async function getImportSummary(): Promise<{ days: number; total: number;
   }
 }
 
-export async function runHistoricalImport(): Promise<number> {
+export async function runHistoricalImport(categoryId: string): Promise<number> {
   const data = historicalData as [string, number][]
   const now = new Date().toISOString()
   const rows: CheckIn[] = []
 
   // Skip any date that already has real check-ins (e.g. from using the app
   // before running the import), so we never double-count a day.
-  const existing = await db.checkins.filter((c) => !c.deleted).toArray()
+  const existing = await db.checkins.where('categoryId').equals(categoryId).filter((c) => !c.deleted).toArray()
   const existingDays = new Set(existing.map((c) => c.checkedAt.slice(0, 10)))
 
   for (const [dateStr, count] of data) {
@@ -54,6 +56,7 @@ export async function runHistoricalImport(): Promise<number> {
       d.setHours(hours, minutes, 0, 0)
       rows.push({
         id: crypto.randomUUID(),
+        categoryId,
         checkedAt: d.toISOString(),
         note: IMPORT_NOTE,
         createdAt: now,

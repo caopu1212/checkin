@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { Auth } from './components/Auth'
 import { CalendarView } from './components/CalendarView'
+import { CategoryPicker } from './components/CategoryPicker'
 import { DayPanel } from './components/DayPanel'
 import { StatsView } from './components/StatsView'
 import { SyncBadge } from './components/SyncBadge'
 import { useAuth } from './hooks/useAuth'
+import { useCategories } from './hooks/useCategories'
 import { useCheckins } from './hooks/useCheckins'
 import { useSync } from './hooks/useSync'
+import type { SyncStatus } from './lib/sync'
 
 type Tab = 'today' | 'calendar' | 'stats'
 
@@ -16,15 +19,27 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'stats', label: '统计' },
 ]
 
-function AppShell({ userId, signOut }: { userId: string; signOut: () => Promise<void> }) {
+interface AppShellProps {
+  categoryId: string
+  categoryName: string
+  onSwitchCategory: () => void
+  syncStatus: SyncStatus
+  signOut: () => Promise<void>
+}
+
+function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, signOut }: AppShellProps) {
   const [tab, setTab] = useState<Tab>('today')
-  const { checkins, addCheckIn, updateCheckIn, deleteCheckIn } = useCheckins()
-  const syncStatus = useSync(userId)
+  const { checkins, addCheckIn, updateCheckIn, deleteCheckIn } = useCheckins(categoryId)
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col">
       <header className="flex items-center justify-between px-4 pb-2 pt-5">
-        <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">打卡</h1>
+        <button type="button" onClick={onSwitchCategory} className="text-left">
+          <p className="text-[11px] leading-none text-neutral-400">打卡 · 切换事件</p>
+          <h1 className="mt-0.5 text-lg font-semibold text-neutral-900 dark:text-neutral-100">
+            {categoryName}
+          </h1>
+        </button>
         <div className="flex items-center gap-3">
           <SyncBadge status={syncStatus} />
           <button
@@ -57,7 +72,7 @@ function AppShell({ userId, signOut }: { userId: string; signOut: () => Promise<
             deleteCheckIn={deleteCheckIn}
           />
         )}
-        {tab === 'stats' && <StatsView checkins={checkins} />}
+        {tab === 'stats' && <StatsView checkins={checkins} categoryId={categoryId} />}
       </main>
 
       <nav className="fixed inset-x-0 bottom-0 mx-auto max-w-md border-t border-neutral-200 bg-white/90 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/90">
@@ -83,6 +98,35 @@ function AppShell({ userId, signOut }: { userId: string; signOut: () => Promise<
   )
 }
 
+function Workspace({ userId, signOut }: { userId: string; signOut: () => Promise<void> }) {
+  const syncStatus = useSync(userId)
+  const { categories, addCategory, renameCategory } = useCategories()
+  const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null)
+
+  const activeCategory = categories.find((c) => c.id === activeCategoryId)
+
+  if (!activeCategory) {
+    return (
+      <CategoryPicker
+        categories={categories}
+        onSelect={setActiveCategoryId}
+        addCategory={addCategory}
+        renameCategory={renameCategory}
+      />
+    )
+  }
+
+  return (
+    <AppShell
+      categoryId={activeCategory.id}
+      categoryName={activeCategory.name}
+      onSwitchCategory={() => setActiveCategoryId(null)}
+      syncStatus={syncStatus}
+      signOut={signOut}
+    />
+  )
+}
+
 function App() {
   const { user, loading, signIn, signUp, signOut } = useAuth()
 
@@ -94,7 +138,7 @@ function App() {
     return <Auth signIn={signIn} signUp={signUp} />
   }
 
-  return <AppShell userId={user.id} signOut={signOut} />
+  return <Workspace userId={user.id} signOut={signOut} />
 }
 
 export default App

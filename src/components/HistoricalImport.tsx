@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
+import { getLegacyCategoryId } from '../hooks/useCategories'
 import { getImportSummary, isHistoricalImportDone, runHistoricalImport } from '../lib/historicalImport'
 
-export function HistoricalImport() {
+interface Props {
+  categoryId: string
+}
+
+export function HistoricalImport({ categoryId }: Props) {
   const [visible, setVisible] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [running, setRunning] = useState(false)
@@ -9,17 +14,26 @@ export function HistoricalImport() {
   const [summary, setSummary] = useState<{ days: number; total: number; skipped: number } | null>(null)
 
   useEffect(() => {
-    isHistoricalImportDone().then(async (done) => {
+    let cancelled = false
+    async function check() {
+      const legacyId = await getLegacyCategoryId()
+      if (legacyId !== categoryId) return
+      const done = await isHistoricalImportDone()
       if (done) return
-      const s = await getImportSummary()
+      const s = await getImportSummary(categoryId)
+      if (cancelled) return
       setSummary(s)
       setVisible(s.total > 0)
-    })
-  }, [])
+    }
+    void check()
+    return () => {
+      cancelled = true
+    }
+  }, [categoryId])
 
   async function handleImport() {
     setRunning(true)
-    const count = await runHistoricalImport()
+    const count = await runHistoricalImport(categoryId)
     setRunning(false)
     setResult(count)
   }

@@ -8,28 +8,32 @@ function newId(): string {
   return crypto.randomUUID()
 }
 
-export function useCheckins() {
+export function useCheckins(categoryId: string) {
   const checkins = useLiveQuery(
-    () => db.checkins.filter((c) => !c.deleted).sortBy('checkedAt'),
-    [],
+    () => db.checkins.where('categoryId').equals(categoryId).filter((c) => !c.deleted).sortBy('checkedAt'),
+    [categoryId],
     [] as CheckIn[],
   )
 
-  const addCheckIn = useCallback(async (checkedAt: Date, note: string | null = null) => {
-    const now = new Date().toISOString()
-    const row: CheckIn = {
-      id: newId(),
-      checkedAt: checkedAt.toISOString(),
-      note,
-      createdAt: now,
-      updatedAt: now,
-      deleted: false,
-      dirty: true,
-    }
-    await db.checkins.put(row)
-    requestSync()
-    return row
-  }, [])
+  const addCheckIn = useCallback(
+    async (checkedAt: Date, note: string | null = null) => {
+      const now = new Date().toISOString()
+      const row: CheckIn = {
+        id: newId(),
+        categoryId,
+        checkedAt: checkedAt.toISOString(),
+        note,
+        createdAt: now,
+        updatedAt: now,
+        deleted: false,
+        dirty: true,
+      }
+      await db.checkins.put(row)
+      requestSync()
+      return row
+    },
+    [categoryId],
+  )
 
   const updateCheckIn = useCallback(
     async (id: string, changes: { checkedAt?: Date; note?: string | null }) => {

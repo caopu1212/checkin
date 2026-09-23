@@ -8,6 +8,7 @@ import { HistoricalImport } from './HistoricalImport'
 
 interface Props {
   checkins: CheckIn[]
+  categoryId: string
 }
 
 type SubTab = 'overview' | 'analysis'
@@ -21,7 +22,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
   )
 }
 
-export function StatsView({ checkins }: Props) {
+export function StatsView({ checkins, categoryId }: Props) {
   const [subTab, setSubTab] = useState<SubTab>('overview')
   const byDay = useMemo(() => groupByDay(checkins), [checkins])
   const streaks = useMemo(() => computeStreaks(byDay), [byDay])
@@ -93,7 +94,7 @@ export function StatsView({ checkins }: Props) {
             </div>
           </div>
 
-          <HistoricalImport />
+          <HistoricalImport categoryId={categoryId} />
         </div>
       ) : (
         <AnalysisView checkins={checkins} />

@@ -1,10 +1,11 @@
 import { db, getMeta, setMeta } from './db'
 import { isSupabaseConfigured, supabase } from './supabase'
-import type { CheckIn } from './types'
+import type { Category, CheckIn } from './types'
 
-interface RemoteRow {
+interface RemoteCheckIn {
   id: string
   user_id: string
+  category_id: string
   checked_at: string
   note: string | null
   created_at: string
@@ -12,12 +13,23 @@ interface RemoteRow {
   deleted: boolean
 }
 
+interface RemoteCategory {
+  id: string
+  user_id: string
+  name: string
+  sort_order: number
+  created_at: string
+  updated_at: string
+  deleted: boolean
+}
+
 const LAST_SYNCED_KEY = 'lastSyncedAt'
 
-function toRemote(row: CheckIn, userId: string) {
+function checkInToRemote(row: CheckIn, userId: string): RemoteCheckIn {
   return {
     id: row.id,
     user_id: userId,
+    category_id: row.categoryId,
     checked_at: row.checkedAt,
     note: row.note,
     created_at: row.createdAt,
@@ -26,9 +38,10 @@ function toRemote(row: CheckIn, userId: string) {
   }
 }
 
-function fromRemote(row: RemoteRow): CheckIn {
+function checkInFromRemote(row: RemoteCheckIn): CheckIn {
   return {
     id: row.id,
+    categoryId: row.category_id,
     checkedAt: row.checked_at,
     note: row.note,
     createdAt: row.created_at,
@@ -38,6 +51,62 @@ function fromRemote(row: RemoteRow): CheckIn {
   }
 }
 
+function categoryToRemote(row: Category, userId: string): RemoteCategory {
+  return {
+    id: row.id,
+    user_id: userId,
+    name: row.name,
+    sort_order: row.order,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+    deleted: row.deleted,
+  }
+}
+
+function categoryFromRemote(row: RemoteCategory): Category {
+  return {
+    id: row.id,
+    name: row.name,
+    order: row.sort_order,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deleted: row.deleted,
+    dirty: false,
+  }
+}
+
+async function pushDirtyCategories(userId: string): Promise<void> {
+  if (!supabase) return
+  const dirtyRows = (await db.categories.toArray()).filter((row) => row.dirty)
+  if (dirtyRows.length === 0) return
+
+  const { error } = await supabase
+    .from('categories')
+    .upsert(dirtyRows.map((row) => categoryToRemote(row, userId)), { onConflict: 'id' })
+  if (error) throw error
+
+  await db.transaction('rw', db.categories, async () => {
+    for (const row of dirtyRows) {
+      await db.categories.update(row.id, { dirty: false })
+    }
+  })
+}
+
+async function pullAllCategories(userId: string): Promise<void> {
+  if (!supabase) return
+  const { data, error } = await supabase.from('categories').select('*').eq('user_id', userId)
+  if (error) throw error
+
+  const remoteRows = (data ?? []) as RemoteCategory[]
+  await db.transaction('rw', db.categories, async () => {
+    for (const remote of remoteRows) {
+      const local = await db.categories.get(remote.id)
+      if (local?.dirty && local.updatedAt > remote.updated_at) continue
+      await db.categories.put(categoryFromRemote(remote))
+    }
+  })
+}
+
 async function pushLocalChanges(userId: string): Promise<void> {
   if (!supabase) return
   const dirtyRows = (await db.checkins.toArray()).filter((row) => row.dirty)
@@ -45,7 +114,7 @@ async function pushLocalChanges(userId: string): Promise<void> {
 
   const { error } = await supabase
     .from('checkins')
-    .upsert(dirtyRows.map((row) => toRemote(row, userId)), { onConflict: 'id' })
+    .upsert(dirtyRows.map((row) => checkInToRemote(row, userId)), { onConflict: 'id' })
 
   if (error) throw error
 
@@ -69,7 +138,7 @@ async function pullRemoteChanges(userId: string): Promise<void> {
 
   if (error) throw error
 
-  const remoteRows = (data ?? []) as RemoteRow[]
+  const remoteRows = (data ?? []) as RemoteCheckIn[]
 
   await db.transaction('rw', db.checkins, async () => {
     for (const remote of remoteRows) {
@@ -77,7 +146,7 @@ async function pullRemoteChanges(userId: string): Promise<void> {
       // Local unsynced edit is newer than what the server had when we last pulled:
       // keep the local version, it will win the next push.
       if (local?.dirty && local.updatedAt > remote.updated_at) continue
-      await db.checkins.put(fromRemote(remote))
+      await db.checkins.put(checkInFromRemote(remote))
     }
   })
 
@@ -86,6 +155,8 @@ async function pullRemoteChanges(userId: string): Promise<void> {
 
 export async function syncNow(userId: string): Promise<void> {
   if (!isSupabaseConfigured) return
+  await pushDirtyCategories(userId)
+  await pullAllCategories(userId)
   await pushLocalChanges(userId)
   await pullRemoteChanges(userId)
 }
