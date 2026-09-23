@@ -92,7 +92,15 @@ async function pushDirtyCategories(userId: string): Promise<void> {
   })
 }
 
-async function pullAllCategories(userId: string): Promise<void> {
+/** Used by the first-run category migration to check whether another device already created categories before we pull them down. */
+export async function hasAnyRemoteCategories(userId: string): Promise<boolean> {
+  if (!supabase) return false
+  const { data, error } = await supabase.from('categories').select('id').eq('user_id', userId).limit(1)
+  if (error) return false // e.g. table doesn't exist yet (pre-migration) - nothing to worry about
+  return (data?.length ?? 0) > 0
+}
+
+export async function pullAllCategories(userId: string): Promise<void> {
   if (!supabase) return
   const { data, error } = await supabase.from('categories').select('*').eq('user_id', userId)
   if (error) throw error

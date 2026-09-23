@@ -100,7 +100,7 @@ function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, sign
 
 function Workspace({ userId, signOut }: { userId: string; signOut: () => Promise<void> }) {
   const syncStatus = useSync(userId)
-  const { categories, addCategory, renameCategory } = useCategories()
+  const { categories, addCategory, renameCategory } = useCategories(userId)
   const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null)
 
   const activeCategory = categories.find((c) => c.id === activeCategoryId)

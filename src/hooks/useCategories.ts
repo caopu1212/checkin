@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useCallback, useEffect } from 'react'
 import { db, getMeta, setMeta } from '../lib/db'
-import { requestSync } from '../lib/sync'
+import { hasAnyRemoteCategories, pullAllCategories, requestSync } from '../lib/sync'
 import type { Category } from '../lib/types'
 
 const MIGRATION_FLAG_KEY = 'categoryMigrationDone'
@@ -17,12 +17,28 @@ function newId(): string {
  * and folds every pre-existing check-in (which predates categories entirely)
  * into the first one, so nothing is silently dropped or unreachable.
  */
-async function ensureDefaultCategories(): Promise<void> {
+/** The first-created category (lowest `order`) is treated as the one legacy data belongs to. */
+async function adoptLegacyCategoryFromLocal(): Promise<void> {
+  const local = await db.categories.filter((c) => !c.deleted).sortBy('order')
+  if (local.length > 0) await setMeta(LEGACY_CATEGORY_META_KEY, local[0].id)
+}
+
+async function ensureDefaultCategories(userId: string): Promise<void> {
   if ((await getMeta(MIGRATION_FLAG_KEY)) === 'true') return
 
   const existingCategories = await db.categories.filter((c) => !c.deleted).toArray()
   if (existingCategories.length > 0) {
     // Already synced down from another device - nothing to create here.
+    await adoptLegacyCategoryFromLocal()
+    await setMeta(MIGRATION_FLAG_KEY, 'true')
+    return
+  }
+
+  // Another device may have already run this migration and pushed its
+  // categories up - check the server before creating a second, competing set.
+  if (await hasAnyRemoteCategories(userId)) {
+    await pullAllCategories(userId)
+    await adoptLegacyCategoryFromLocal()
     await setMeta(MIGRATION_FLAG_KEY, 'true')
     return
   }
@@ -70,15 +86,15 @@ export async function getLegacyCategoryId(): Promise<string | undefined> {
 // or just two components mounting at once) await the same run instead of racing
 // each other and each seeing "0 categories yet".
 let migrationPromise: Promise<void> | null = null
-function ensureDefaultCategoriesOnce(): Promise<void> {
-  if (!migrationPromise) migrationPromise = ensureDefaultCategories()
+function ensureDefaultCategoriesOnce(userId: string): Promise<void> {
+  if (!migrationPromise) migrationPromise = ensureDefaultCategories(userId)
   return migrationPromise
 }
 
-export function useCategories() {
+export function useCategories(userId: string) {
   useEffect(() => {
-    void ensureDefaultCategoriesOnce()
-  }, [])
+    void ensureDefaultCategoriesOnce(userId)
+  }, [userId])
 
   const categories = useLiveQuery(
     () => db.categories.filter((c) => !c.deleted).sortBy('order'),
