@@ -69,11 +69,7 @@ function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, sign
               />
             </div>
             <p className="pb-2 text-center text-sm text-neutral-400">
-              {gapDays === null
-                ? '还没有打卡记录，现在开始吧'
-                : gapDays === 0
-                  ? '你今天已经打卡了'
-                  : `你已经 ${gapDays} 天没打卡了`}
+              {gapDays === null ? '还没有打卡记录，现在开始吧' : `你已经 ${gapDays} 天没打卡了`}
             </p>
           </>
         )}
