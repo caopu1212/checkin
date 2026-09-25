@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Auth } from './components/Auth'
 import { CalendarView } from './components/CalendarView'
 import { CategoryPicker } from './components/CategoryPicker'
@@ -10,6 +10,7 @@ import { useCategories } from './hooks/useCategories'
 import { useCheckins } from './hooks/useCheckins'
 import { useSync } from './hooks/useSync'
 import type { SyncStatus } from './lib/sync'
+import { daysSinceLastCheckIn } from './lib/stats'
 
 type Tab = 'today' | 'calendar' | 'stats'
 
@@ -30,6 +31,7 @@ interface AppShellProps {
 function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, signOut }: AppShellProps) {
   const [tab, setTab] = useState<Tab>('today')
   const { checkins, addCheckIn, updateCheckIn, deleteCheckIn } = useCheckins(categoryId)
+  const gapDays = useMemo(() => daysSinceLastCheckIn(checkins), [checkins])
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col">
@@ -54,15 +56,22 @@ function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, sign
 
       <main className={`flex-1 px-4 pb-24 pt-2 ${tab === 'today' ? 'flex flex-col justify-center' : ''}`}>
         {tab === 'today' && (
-          <DayPanel
-            date={new Date()}
-            checkins={checkins.filter(
-              (c) => new Date(c.checkedAt).toDateString() === new Date().toDateString(),
+          <>
+            <DayPanel
+              date={new Date()}
+              checkins={checkins.filter(
+                (c) => new Date(c.checkedAt).toDateString() === new Date().toDateString(),
+              )}
+              addCheckIn={addCheckIn}
+              updateCheckIn={updateCheckIn}
+              deleteCheckIn={deleteCheckIn}
+            />
+            {gapDays !== null && gapDays > 0 && (
+              <p className="mt-6 text-center text-sm text-neutral-400">
+                你已经 {gapDays} 天没打卡了
+              </p>
             )}
-            addCheckIn={addCheckIn}
-            updateCheckIn={updateCheckIn}
-            deleteCheckIn={deleteCheckIn}
-          />
+          </>
         )}
         {tab === 'calendar' && (
           <CalendarView

@@ -79,3 +79,11 @@ export function daysSinceFirst(checkins: CheckIn[]): { days: number; firstDate: 
   const days = differenceInCalendarDays(startOfDay(new Date()), firstDate) + 1
   return { days, firstDate }
 }
+
+/** Days since the most recent check-in (0 if it was today); null if there are no check-ins at all. */
+export function daysSinceLastCheckIn(checkins: CheckIn[]): number | null {
+  if (checkins.length === 0) return null
+  const lastMs = Math.max(...checkins.map((c) => new Date(c.checkedAt).getTime()))
+  const lastDay = startOfDay(new Date(lastMs))
+  return differenceInCalendarDays(startOfDay(new Date()), lastDay)
+}
