@@ -54,23 +54,27 @@ function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, sign
         </div>
       </header>
 
-      <main className={`flex-1 px-4 pb-24 pt-2 ${tab === 'today' ? 'flex flex-col justify-center' : ''}`}>
+      <main className={`flex-1 px-4 pb-24 pt-2 ${tab === 'today' ? 'flex flex-col' : ''}`}>
         {tab === 'today' && (
           <>
-            <DayPanel
-              date={new Date()}
-              checkins={checkins.filter(
-                (c) => new Date(c.checkedAt).toDateString() === new Date().toDateString(),
-              )}
-              addCheckIn={addCheckIn}
-              updateCheckIn={updateCheckIn}
-              deleteCheckIn={deleteCheckIn}
-            />
-            {gapDays !== null && gapDays > 0 && (
-              <p className="mt-6 text-center text-sm text-neutral-400">
-                你已经 {gapDays} 天没打卡了
-              </p>
-            )}
+            <div className="flex flex-1 flex-col justify-center">
+              <DayPanel
+                date={new Date()}
+                checkins={checkins.filter(
+                  (c) => new Date(c.checkedAt).toDateString() === new Date().toDateString(),
+                )}
+                addCheckIn={addCheckIn}
+                updateCheckIn={updateCheckIn}
+                deleteCheckIn={deleteCheckIn}
+              />
+            </div>
+            <p className="pb-2 text-center text-sm text-neutral-400">
+              {gapDays === null
+                ? '还没有打卡记录，现在开始吧'
+                : gapDays === 0
+                  ? '你今天已经打卡了'
+                  : `你已经 ${gapDays} 天没打卡了`}
+            </p>
           </>
         )}
         {tab === 'calendar' && (
