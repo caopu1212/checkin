@@ -1,20 +1,21 @@
 import { useMemo } from 'react'
 import { format } from 'date-fns'
 import {
+  buildHeatmap,
   hourDistribution,
   linearTrend,
-  monthlyActivityClusters,
-  monthlyActivityTiers,
+  monthOverMonth,
   monthlyTotals,
   regularityStats,
-  seasonality,
+  weekOverWeek,
   weekdayDistribution,
+  type PeriodComparison,
 } from '../lib/analysis'
 import { groupByDay, daysSinceFirst } from '../lib/stats'
 import type { CheckIn } from '../lib/types'
 import { ColumnChart } from './charts/ColumnChart'
+import { HeatmapChart } from './charts/HeatmapChart'
 import { LineChart } from './charts/LineChart'
-import { ScatterChart } from './charts/ScatterChart'
 
 interface Props {
   checkins: CheckIn[]
@@ -36,6 +37,33 @@ const TREND_TEXT = {
   flat: '基本持平',
 }
 
+function PeriodCard({ comparison }: { comparison: PeriodComparison }) {
+  const { currentLabel, previousLabel, current, previous } = comparison
+  const delta = current - previous
+  const pct = previous > 0 ? Math.round((delta / previous) * 100) : null
+  const arrow = delta > 0 ? '↑' : delta < 0 ? '↓' : '→'
+  const deltaColor =
+    delta > 0
+      ? 'text-green-600 dark:text-green-400'
+      : delta < 0
+        ? 'text-red-600 dark:text-red-400'
+        : 'text-neutral-400'
+
+  return (
+    <div className="flex-1 rounded-lg border border-neutral-200 p-3 text-center dark:border-neutral-800">
+      <p className="text-2xl font-semibold text-neutral-900 dark:text-neutral-100">{current}</p>
+      <p className="mt-0.5 text-[11px] text-neutral-500">{currentLabel}打卡</p>
+      <p className={`mt-2 text-xs font-medium ${deltaColor}`}>
+        {arrow} {Math.abs(delta)}
+        {pct !== null && ` (${pct > 0 ? '+' : ''}${pct}%)`}
+      </p>
+      <p className="mt-0.5 text-[10px] text-neutral-400">
+        较{previousLabel} {previous} 次
+      </p>
+    </div>
+  )
+}
+
 export function AnalysisView({ checkins }: Props) {
   const byDay = useMemo(() => groupByDay(checkins), [checkins])
   const { days: totalDays, firstDate } = useMemo(() => daysSinceFirst(checkins), [checkins])
@@ -47,9 +75,9 @@ export function AnalysisView({ checkins }: Props) {
     () => months.map((_, i) => trend.slopePerMonth * i + trend.intercept),
     [months, trend],
   )
-  const clusters = useMemo(() => monthlyActivityClusters(months), [months])
-  const tieredMonths = useMemo(() => monthlyActivityTiers(months), [months])
-  const season = useMemo(() => seasonality(months), [months])
+  const heatmapWeeks = useMemo(() => buildHeatmap(byDay, firstDate), [byDay, firstDate])
+  const weekCompare = useMemo(() => weekOverWeek(checkins), [checkins])
+  const monthCompare = useMemo(() => monthOverMonth(checkins), [checkins])
   const { buckets: hours, sampleSize: hourSampleSize } = useMemo(() => hourDistribution(checkins), [checkins])
 
   if (checkins.length === 0) {
@@ -58,8 +86,6 @@ export function AnalysisView({ checkins }: Props) {
 
   const busiestWeekday = weekday.reduce((a, b) => (b.count > a.count ? b : a))
   const busiestHour = hours.reduce((a, b) => (b.count > a.count ? b : a))
-  const busiestSeasonMonth = season.reduce((a, b) => (b.avg > a.avg ? b : a))
-  const currentMonthTier = tieredMonths[tieredMonths.length - 1]?.tier
 
   return (
     <div className="space-y-4">
@@ -97,6 +123,13 @@ export function AnalysisView({ checkins }: Props) {
         )}
       </Section>
 
+      <Section title="同比 / 环比">
+        <div className="flex gap-3">
+          <PeriodCard comparison={weekCompare} />
+          <PeriodCard comparison={monthCompare} />
+        </div>
+      </Section>
+
       <Section
         title="月度趋势（线性回归）"
         note={`最小二乘法拟合：每月约 ${trend.slopePerMonth >= 0 ? '+' : ''}${trend.slopePerMonth.toFixed(2)} 次，${TREND_TEXT[trend.direction]}。按此趋势外推，下个月预计约 ${trend.predictedNextMonth.toFixed(1)} 次。数据较少或波动大时，趋势仅供参考。点击图上的点可查看当月具体数值。`}
@@ -104,23 +137,8 @@ export function AnalysisView({ checkins }: Props) {
         <LineChart data={months.map((m) => ({ label: m.label, value: m.count }))} trend={trendSeries} />
       </Section>
 
-      <Section
-        title="活跃度聚类点阵图（K-Means, k=3）"
-        note={`按每月打卡总次数做聚类，把 ${months.length} 个月分成低/中/高三档活跃度：低 ${clusters.find((c) => c.label === '低')?.months.length ?? 0} 个月（月均${(clusters.find((c) => c.label === '低')?.center ?? 0).toFixed(1)}次）、中 ${clusters.find((c) => c.label === '中')?.months.length ?? 0} 个月（月均${(clusters.find((c) => c.label === '中')?.center ?? 0).toFixed(1)}次）、高 ${clusters.find((c) => c.label === '高')?.months.length ?? 0} 个月（月均${(clusters.find((c) => c.label === '高')?.center ?? 0).toFixed(1)}次）。最近一个月属于「${currentMonthTier ?? '-'}」档。`}
-      >
-        <ScatterChart
-          data={tieredMonths.map(({ month, tier }) => ({ label: month.label, value: month.count, tier }))}
-        />
-      </Section>
-
-      <Section
-        title="季节性（按日历月份）"
-        note={`跨年汇总每个日历月的月均打卡次数，用来看是否存在季节性规律，与上面按时间先后的月度趋势不同。${busiestSeasonMonth.label}历史平均最高（约 ${busiestSeasonMonth.avg.toFixed(1)} 次）。含首月/当月不完整数据，仅供参考。`}
-      >
-        <ColumnChart
-          data={season.map((s) => ({ label: s.label, value: Math.round(s.avg * 10) / 10 }))}
-          valueSuffix=" 次"
-        />
+      <Section title="活跃度热力图" note="点击某一天可查看当天打卡次数，颜色越深次数越多。">
+        <HeatmapChart weeks={heatmapWeeks} />
       </Section>
 
       <Section title="星期分布" note={`打卡最多的是周${busiestWeekday.label}`}>

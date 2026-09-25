@@ -1,4 +1,19 @@
-import { differenceInCalendarDays, eachMonthOfInterval, format, startOfDay, startOfMonth } from 'date-fns'
+import {
+  addDays,
+  addWeeks,
+  differenceInCalendarDays,
+  eachMonthOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isWithinInterval,
+  startOfDay,
+  startOfMonth,
+  startOfWeek,
+  subMonths,
+  subWeeks,
+} from 'date-fns'
+import { dayKey } from './date'
 import { IMPORT_NOTE } from './historicalImport'
 import type { CheckIn } from './types'
 
@@ -73,115 +88,85 @@ export function linearTrend(monthly: MonthBucket[]): TrendResult {
   return { slopePerMonth: slope, intercept, direction, predictedNextMonth }
 }
 
-/**
- * Simple deterministic 1D k-means: centers seed from evenly-spaced quantiles
- * of the sorted values (no randomness, so results are stable/reproducible).
- */
-export function kMeans1D(values: number[], k: number, maxIterations = 25): { assignments: number[]; centers: number[] } {
-  if (values.length === 0) return { assignments: [], centers: [] }
-  const effectiveK = Math.min(k, new Set(values).size || 1)
-  const sorted = [...values].sort((a, b) => a - b)
-  let centers = Array.from({ length: effectiveK }, (_, i) => {
-    const idx = Math.floor(((i + 0.5) / effectiveK) * sorted.length)
-    return sorted[Math.min(idx, sorted.length - 1)]
-  })
+export interface PeriodComparison {
+  currentLabel: string
+  previousLabel: string
+  current: number
+  previous: number
+}
 
-  let assignments = new Array(values.length).fill(0)
-  for (let iter = 0; iter < maxIterations; iter++) {
-    let changed = false
-    assignments = values.map((v) => {
-      let best = 0
-      let bestDist = Infinity
-      for (let c = 0; c < centers.length; c++) {
-        const dist = Math.abs(v - centers[c])
-        if (dist < bestDist) {
-          bestDist = dist
-          best = c
-        }
-      }
-      return best
-    })
+function countBetween(checkins: CheckIn[], start: Date, end: Date): number {
+  return checkins.filter((c) => isWithinInterval(new Date(c.checkedAt), { start, end })).length
+}
 
-    const sums = new Array(centers.length).fill(0)
-    const counts = new Array(centers.length).fill(0)
-    values.forEach((v, i) => {
-      sums[assignments[i]] += v
-      counts[assignments[i]] += 1
-    })
-    const nextCenters = centers.map((c, i) => (counts[i] > 0 ? sums[i] / counts[i] : c))
-    if (nextCenters.some((c, i) => c !== centers[i])) changed = true
-    centers = nextCenters
-    if (!changed) break
+/** This calendar week (Monday-first) vs the same weekday range last week. */
+export function weekOverWeek(checkins: CheckIn[]): PeriodComparison {
+  const now = new Date()
+  const thisStart = startOfWeek(now, { weekStartsOn: 1 })
+  const thisEnd = endOfWeek(now, { weekStartsOn: 1 })
+  const lastStart = subWeeks(thisStart, 1)
+  const lastEnd = subWeeks(thisEnd, 1)
+  return {
+    currentLabel: '本周',
+    previousLabel: '上周',
+    current: countBetween(checkins, thisStart, thisEnd),
+    previous: countBetween(checkins, lastStart, lastEnd),
   }
-
-  return { assignments, centers }
 }
 
-export type ActivityTier = '低' | '中' | '高'
-
-export interface ActivityCluster {
-  label: ActivityTier
-  center: number
-  months: MonthBucket[]
-}
-
-export interface TieredMonth {
-  month: MonthBucket
-  tier: ActivityTier
-}
-
-const TIER_LABELS: ActivityTier[] = ['低', '中', '高']
-
-/** k=3 k-means on monthly totals, kept in chronological order (for a scatter/time-series view). */
-export function monthlyActivityTiers(monthly: MonthBucket[]): TieredMonth[] {
-  if (monthly.length === 0) return []
-  const values = monthly.map((m) => m.count)
-  const { assignments, centers } = kMeans1D(values, 3)
-  const rankedClusterIndices = centers.map((_, i) => i).sort((a, b) => centers[a] - centers[b])
-  const labelForCluster = new Map<number, ActivityTier>()
-  rankedClusterIndices.forEach((clusterIdx, rank) => {
-    labelForCluster.set(clusterIdx, TIER_LABELS[Math.min(rank, TIER_LABELS.length - 1)])
-  })
-  return monthly.map((month, i) => ({ month, tier: labelForCluster.get(assignments[i])! }))
-}
-
-/** Groups the same k-means assignment into low/mid/high buckets for a summary view. */
-export function monthlyActivityClusters(monthly: MonthBucket[]): ActivityCluster[] {
-  const tiered = monthlyActivityTiers(monthly)
-  const groups = new Map<ActivityTier, MonthBucket[]>()
-  for (const { month, tier } of tiered) {
-    const list = groups.get(tier) ?? []
-    list.push(month)
-    groups.set(tier, list)
+/** This calendar month vs last calendar month. */
+export function monthOverMonth(checkins: CheckIn[]): PeriodComparison {
+  const now = new Date()
+  const thisStart = startOfMonth(now)
+  const thisEnd = endOfMonth(now)
+  const lastMonthAnchor = subMonths(now, 1)
+  const lastStart = startOfMonth(lastMonthAnchor)
+  const lastEnd = endOfMonth(lastMonthAnchor)
+  return {
+    currentLabel: '本月',
+    previousLabel: '上月',
+    current: countBetween(checkins, thisStart, thisEnd),
+    previous: countBetween(checkins, lastStart, lastEnd),
   }
-  return TIER_LABELS.filter((label) => groups.has(label)).map((label) => {
-    const months = groups.get(label)!
-    const center = months.reduce((sum, m) => sum + m.count, 0) / months.length
-    return { label, center, months }
-  })
 }
 
-export interface SeasonalBucket {
-  monthNum: number
-  label: string
-  avg: number
+export interface HeatmapDay {
+  date: Date
+  key: string
+  count: number
+  inRange: boolean
 }
 
-/** Average count per calendar month (Jan–Dec) across all years present, to surface seasonality independent of the chronological trend. */
-export function seasonality(monthly: MonthBucket[]): SeasonalBucket[] {
-  const byMonthNum = new Map<number, number[]>()
-  for (const m of monthly) {
-    const monthNum = Number(m.key.slice(5, 7))
-    const list = byMonthNum.get(monthNum) ?? []
-    list.push(m.count)
-    byMonthNum.set(monthNum, list)
+export interface HeatmapWeek {
+  days: HeatmapDay[] // always Monday..Sunday
+  monthLabel: string | null // set on the week containing the 1st of a month
+}
+
+/** Weekly grid (Monday-first rows of 7) from the first check-in's week through this week, GitHub-contributions style. */
+export function buildHeatmap(byDay: Map<string, CheckIn[]>, firstDate: Date | null): HeatmapWeek[] {
+  const today = startOfDay(new Date())
+  const rangeStart = firstDate ?? today
+  const gridStart = startOfWeek(rangeStart, { weekStartsOn: 1 })
+  const gridEnd = endOfWeek(today, { weekStartsOn: 1 })
+
+  const weeks: HeatmapWeek[] = []
+  for (let cursor = gridStart; cursor <= gridEnd; cursor = addWeeks(cursor, 1)) {
+    const days: HeatmapDay[] = []
+    let monthLabel: string | null = null
+    for (let i = 0; i < 7; i++) {
+      const date = addDays(cursor, i)
+      const key = dayKey(date)
+      days.push({
+        date,
+        key,
+        count: byDay.get(key)?.length ?? 0,
+        inRange: date >= rangeStart && date <= today,
+      })
+      if (date.getDate() === 1) monthLabel = format(date, 'M月')
+    }
+    weeks.push({ days, monthLabel })
   }
-  return Array.from({ length: 12 }, (_, i) => {
-    const monthNum = i + 1
-    const list = byMonthNum.get(monthNum) ?? []
-    const avg = list.length > 0 ? list.reduce((a, b) => a + b, 0) / list.length : 0
-    return { monthNum, label: `${monthNum}月`, avg }
-  })
+  return weeks
 }
 
 export interface RegularityStats {
