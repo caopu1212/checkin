@@ -12,10 +12,21 @@ export function CheckInRow({ checkIn, onUpdate, onDelete }: Props) {
   const [editing, setEditing] = useState(false)
   const [time, setTime] = useState(formatTime(checkIn.checkedAt))
   const [note, setNote] = useState(checkIn.note ?? '')
+  const editedAt = combineDateAndTime(new Date(checkIn.checkedAt), time)
+  const editedInFuture = editedAt > new Date()
+
+  function startEditing() {
+    // The record may have changed since this row mounted (e.g. synced from
+    // another device), so start from its current values, not the stale ones.
+    setTime(formatTime(checkIn.checkedAt))
+    setNote(checkIn.note ?? '')
+    setEditing(true)
+  }
 
   async function save() {
+    if (editedInFuture) return
     await onUpdate(checkIn.id, {
-      checkedAt: combineDateAndTime(new Date(checkIn.checkedAt), time),
+      checkedAt: editedAt,
       note: note.trim() ? note.trim() : null,
     })
     setEditing(false)
@@ -57,11 +68,13 @@ export function CheckInRow({ checkIn, onUpdate, onDelete }: Props) {
           <button
             type="button"
             onClick={save}
-            className="rounded-md bg-violet-700 px-3 py-1.5 text-white hover:bg-violet-800"
+            disabled={editedInFuture}
+            className="rounded-md bg-violet-700 px-3 py-1.5 text-white hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-40"
           >
             保存
           </button>
         </div>
+        {editedInFuture && <p className="text-right text-xs text-red-600">不能晚于当前时间</p>}
       </li>
     )
   }
@@ -70,7 +83,7 @@ export function CheckInRow({ checkIn, onUpdate, onDelete }: Props) {
     <li>
       <button
         type="button"
-        onClick={() => setEditing(true)}
+        onClick={startEditing}
         className="flex w-full items-center justify-between rounded-lg border border-neutral-200 bg-white px-3 py-2.5 text-left hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900"
       >
         <span className="font-mono text-base text-neutral-900 dark:text-neutral-100">

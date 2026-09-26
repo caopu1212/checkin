@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { startOfDay } from 'date-fns'
 import { combineDateAndTime, formatDateLong, isToday } from '../lib/date'
 import type { CheckIn } from '../lib/types'
 import { CheckInRow } from './CheckInRow'
@@ -17,13 +18,19 @@ export function DayPanel({ date, checkins, addCheckIn, updateCheckIn, deleteChec
 
   const today = isToday(date)
   const sorted = [...checkins].sort((a, b) => a.checkedAt.localeCompare(b.checkedAt))
+  // Future check-ins make no sense for a log of things that happened, and they
+  // break "days since last check-in" and the time-series charts.
+  const isFutureDay = startOfDay(date) > startOfDay(new Date())
+  const backfillAt = combineDateAndTime(date, time)
+  const backfillInFuture = backfillAt > new Date()
 
   async function checkInNow() {
     await addCheckIn(new Date())
   }
 
   async function addAtTime() {
-    await addCheckIn(combineDateAndTime(date, time))
+    if (backfillInFuture) return
+    await addCheckIn(backfillAt)
     setAddingTime(false)
   }
 
@@ -55,11 +62,13 @@ export function DayPanel({ date, checkins, addCheckIn, updateCheckIn, deleteChec
       )}
 
       {sorted.length === 0 && !today && (
-        <p className="py-6 text-center text-sm text-neutral-400">这一天还没有打卡记录</p>
+        <p className="py-6 text-center text-sm text-neutral-400">
+          {isFutureDay ? '未来的日期还不能打卡' : '这一天还没有打卡记录'}
+        </p>
       )}
 
-      {addingTime ? (
-        <div className="flex items-center gap-2 rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
+      {isFutureDay ? null : addingTime ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
           <input
             type="time"
             value={time}
@@ -77,11 +86,13 @@ export function DayPanel({ date, checkins, addCheckIn, updateCheckIn, deleteChec
             <button
               type="button"
               onClick={addAtTime}
-              className="rounded-md bg-violet-700 px-3 py-1.5 text-sm text-white hover:bg-violet-800"
+              disabled={backfillInFuture}
+              className="rounded-md bg-violet-700 px-3 py-1.5 text-sm text-white hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-40"
             >
               添加
             </button>
           </div>
+          {backfillInFuture && <p className="w-full text-xs text-red-600">不能晚于当前时间</p>}
         </div>
       ) : (
         <button

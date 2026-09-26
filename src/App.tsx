@@ -8,7 +8,9 @@ import { SyncBadge } from './components/SyncBadge'
 import { useAuth } from './hooks/useAuth'
 import { useCategories } from './hooks/useCategories'
 import { useCheckins } from './hooks/useCheckins'
+import { useCurrentDay } from './hooks/useCurrentDay'
 import { useSync } from './hooks/useSync'
+import { dayKey } from './lib/date'
 import type { SyncStatus } from './lib/sync'
 import { daysSinceLastCheckIn } from './lib/stats'
 
@@ -31,7 +33,13 @@ interface AppShellProps {
 function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, signOut }: AppShellProps) {
   const [tab, setTab] = useState<Tab>('today')
   const { checkins, addCheckIn, updateCheckIn, deleteCheckIn } = useCheckins(categoryId)
-  const gapDays = useMemo(() => daysSinceLastCheckIn(checkins), [checkins])
+  const todayKey = useCurrentDay()
+  const today = useMemo(() => new Date(`${todayKey}T00:00:00`), [todayKey])
+  const todayCheckins = useMemo(
+    () => checkins.filter((c) => dayKey(new Date(c.checkedAt)) === todayKey),
+    [checkins, todayKey],
+  )
+  const gapDays = useMemo(() => daysSinceLastCheckIn(checkins, today), [checkins, today])
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col">
@@ -59,10 +67,8 @@ function AppShell({ categoryId, categoryName, onSwitchCategory, syncStatus, sign
           <>
             <div className="flex flex-1 flex-col justify-center">
               <DayPanel
-                date={new Date()}
-                checkins={checkins.filter(
-                  (c) => new Date(c.checkedAt).toDateString() === new Date().toDateString(),
-                )}
+                date={today}
+                checkins={todayCheckins}
                 addCheckIn={addCheckIn}
                 updateCheckIn={updateCheckIn}
                 deleteCheckIn={deleteCheckIn}

@@ -1,9 +1,9 @@
 import historicalData from '../data/historical-import.json'
-import { db, getMeta, setMeta } from './db'
+import { dayKey } from './date'
+import { db } from './db'
 import { requestSync } from './sync'
 import type { CheckIn } from './types'
 
-const IMPORT_FLAG_KEY = 'historicalImportDone'
 const DAY_START_HOUR = 8
 const DAY_END_HOUR = 22
 export const IMPORT_NOTE = '历史导入'
@@ -21,18 +21,29 @@ function timesForCount(n: number): Array<{ hours: number; minutes: number }> {
   return times
 }
 
-export async function isHistoricalImportDone(): Promise<boolean> {
-  return (await getMeta(IMPORT_FLAG_KEY)) === 'true'
+export interface ImportSummary {
+  alreadyImported: boolean
+  days: number
+  total: number
+  skipped: number
 }
 
-export async function getImportSummary(
-  categoryId: string,
-): Promise<{ days: number; total: number; skipped: number }> {
+/**
+ * `categoryCheckins` should include soft-deleted rows: if any imported row
+ * exists in this category (on this device or synced from another one), the
+ * import already happened and must not be offered again.
+ */
+export function summarizeImport(categoryCheckins: CheckIn[]): ImportSummary {
   const data = historicalData as [string, number][]
-  const existing = await db.checkins.where('categoryId').equals(categoryId).filter((c) => !c.deleted).toArray()
-  const existingDays = new Set(existing.map((c) => c.checkedAt.slice(0, 10)))
+  const alreadyImported = categoryCheckins.some((c) => c.note === IMPORT_NOTE)
+  // Compare by *local* calendar day: slicing the ISO string would give the UTC
+  // date, which is the previous day for early-morning check-ins in UTC+9.
+  const existingDays = new Set(
+    categoryCheckins.filter((c) => !c.deleted).map((c) => dayKey(new Date(c.checkedAt))),
+  )
   const toImport = data.filter(([dateStr]) => !existingDays.has(dateStr))
   return {
+    alreadyImported,
     days: toImport.length,
     total: toImport.reduce((sum, [, count]) => sum + count, 0),
     skipped: data.length - toImport.length,
@@ -42,13 +53,17 @@ export async function getImportSummary(
 export async function runHistoricalImport(categoryId: string): Promise<number> {
   const data = historicalData as [string, number][]
   const now = new Date().toISOString()
+
+  // Re-check against the freshest local data at click time, not the summary
+  // the card was rendered with.
+  const categoryCheckins = await db.checkins.where('categoryId').equals(categoryId).toArray()
+  const summary = summarizeImport(categoryCheckins)
+  if (summary.alreadyImported) return 0
+  const existingDays = new Set(
+    categoryCheckins.filter((c) => !c.deleted).map((c) => dayKey(new Date(c.checkedAt))),
+  )
+
   const rows: CheckIn[] = []
-
-  // Skip any date that already has real check-ins (e.g. from using the app
-  // before running the import), so we never double-count a day.
-  const existing = await db.checkins.where('categoryId').equals(categoryId).filter((c) => !c.deleted).toArray()
-  const existingDays = new Set(existing.map((c) => c.checkedAt.slice(0, 10)))
-
   for (const [dateStr, count] of data) {
     if (existingDays.has(dateStr)) continue
     for (const { hours, minutes } of timesForCount(count)) {
@@ -68,7 +83,6 @@ export async function runHistoricalImport(categoryId: string): Promise<number> {
   }
 
   await db.checkins.bulkPut(rows)
-  await setMeta(IMPORT_FLAG_KEY, 'true')
   requestSync(0)
   return rows.length
 }

@@ -1,34 +1,30 @@
-import { useEffect, useState } from 'react'
-import { getLegacyCategoryId } from '../hooks/useCategories'
-import { getImportSummary, isHistoricalImportDone, runHistoricalImport } from '../lib/historicalImport'
+import { useLiveQuery } from 'dexie-react-hooks'
+import { useState } from 'react'
+import { db, LAST_SYNCED_KEY, LEGACY_CATEGORY_META_KEY } from '../lib/db'
+import { runHistoricalImport, summarizeImport } from '../lib/historicalImport'
 
 interface Props {
   categoryId: string
 }
 
 export function HistoricalImport({ categoryId }: Props) {
-  const [visible, setVisible] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<number | null>(null)
-  const [summary, setSummary] = useState<{ days: number; total: number; skipped: number } | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    async function check() {
-      const legacyId = await getLegacyCategoryId()
-      if (legacyId !== categoryId) return
-      const done = await isHistoricalImportDone()
-      if (done) return
-      const s = await getImportSummary(categoryId)
-      if (cancelled) return
-      setSummary(s)
-      setVisible(s.total > 0)
-    }
-    void check()
-    return () => {
-      cancelled = true
-    }
+  // Reactive, so the card disappears on its own if another device's import
+  // syncs down while it's on screen.
+  const state = useLiveQuery(async () => {
+    const [legacy, lastSynced] = await Promise.all([
+      db.meta.get(LEGACY_CATEGORY_META_KEY),
+      db.meta.get(LAST_SYNCED_KEY),
+    ])
+    if (legacy?.value !== categoryId) return null
+    // Until one pull has completed we don't know whether another device
+    // already imported - offering it now could create a duplicate set.
+    if (!lastSynced) return null
+    const categoryCheckins = await db.checkins.where('categoryId').equals(categoryId).toArray()
+    return summarizeImport(categoryCheckins)
   }, [categoryId])
 
   async function handleImport() {
@@ -41,12 +37,13 @@ export function HistoricalImport({ categoryId }: Props) {
   if (result !== null) {
     return (
       <div className="rounded-xl border border-green-300 bg-green-50 p-4 text-sm text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-        已导入 {result} 条历史打卡记录，联网后会自动同步到云端。
+        {result > 0 ? `已导入 ${result} 条历史打卡记录，联网后会自动同步到云端。` : '历史数据之前已经导入过了，无需重复导入。'}
       </div>
     )
   }
 
-  if (!visible || !summary) return null
+  if (!state || state.alreadyImported || state.total === 0) return null
+  const summary = state
 
   return (
     <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">

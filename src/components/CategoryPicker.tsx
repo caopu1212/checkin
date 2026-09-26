@@ -11,6 +11,12 @@ interface Props {
   deleteCategory: (id: string) => Promise<void>
 }
 
+// With a Chinese/Japanese IME, Enter first confirms the candidate text; only a
+// plain Enter (not mid-composition) should submit, or a half-typed name gets saved.
+function isSubmitKey(e: React.KeyboardEvent<HTMLInputElement>): boolean {
+  return e.key === 'Enter' && !e.nativeEvent.isComposing
+}
+
 function useCheckinCount(categoryId: string): number {
   return (
     useLiveQuery(
@@ -51,7 +57,7 @@ function CategoryRow({
           type="text"
           value={editingName}
           onChange={(e) => setEditingName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && submitRename()}
+          onKeyDown={(e) => isSubmitKey(e) && submitRename()}
           className="flex-1 rounded-md border border-neutral-300 px-2 py-1.5 text-base dark:border-neutral-700 dark:bg-neutral-900"
         />
         <button
@@ -188,7 +194,7 @@ export function CategoryPicker({ categories, onSelect, addCategory, renameCatego
             placeholder="事件名称"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submitAdd()}
+            onKeyDown={(e) => isSubmitKey(e) && submitAdd()}
             className="flex-1 rounded-md border border-neutral-300 px-2 py-1.5 text-base dark:border-neutral-700 dark:bg-neutral-900"
           />
           <button
